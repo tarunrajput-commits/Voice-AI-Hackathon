@@ -1,0 +1,96 @@
+{
+ "text": "नमस्ते जी, मैं IndiaMART से वाणी बोल रही हूँ। आपकी तीन नई enquiries आई हैं, और दो products की price अभी add नहीं हुई है। क्या मैं आपकी मदद कर दूँ?",
+ "voices": [
+  {
+   "model": "bulbul:v3",
+   "speaker": "priya",
+   "desc": "current voice",
+   "file": "priya.wav",
+   "ms": 3168
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "ritu_hi_customer",
+   "desc": "Hindi customer-care, female",
+   "file": "ritu_hi_customer.wav",
+   "ms": 1781
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "ritu_hi_customer_warm",
+   "desc": "Hindi customer-care, warm, female",
+   "file": "ritu_hi_customer_warm.wav",
+   "ms": 1964
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "aparna_hi_customer",
+   "desc": "Hindi customer-care, female",
+   "file": "aparna_hi_customer.wav",
+   "ms": 1763
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "chaitra_hi_customer",
+   "desc": "Hindi customer-care, female",
+   "file": "chaitra_hi_customer.wav",
+   "ms": 2094
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "aarti_hi_customer",
+   "desc": "Hindi customer-care, female",
+   "file": "aarti_hi_customer.wav",
+   "ms": 1848
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "sanchita_hi_assistant",
+   "desc": "Hindi assistant, female",
+   "file": "sanchita_hi_assistant.wav",
+   "ms": 1697
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "simran_hi_assistant",
+   "desc": "Hindi assistant, female",
+   "file": "simran_hi_assistant.wav",
+   "ms": 1956
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "ishita_enhi_customer",
+   "desc": "Hinglish customer-care, female",
+   "file": "ishita_enhi_customer.wav",
+   "ms": 1990
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "simran_enhi_customer",
+   "desc": "Hinglish customer-care, female",
+   "file": "simran_enhi_customer.wav",
+   "ms": 1801
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "shalini_enhi_customer",
+   "desc": "Hinglish customer-care, female",
+   "file": "shalini_enhi_customer.wav",
+   "ms": 1854
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "shubh_hi_customer",
+   "desc": "Hindi customer-care, male",
+   "file": "shubh_hi_customer.wav",
+   "ms": 6643
+  },
+  {
+   "model": "bulbul:v4-flash",
+   "speaker": "aditya_hi_sales",
+   "desc": "Hindi sales, male",
+   "file": "aditya_hi_sales.wav",
+   "ms": 1660
+  }
+ ]
+}
