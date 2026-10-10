@@ -2,9 +2,9 @@
 schema: seller.v2
 glid: "12855767"
 role: seller
-generated_at: 2026-10-10T10:49:29.905Z
-freshness_ms: 35.4
-build_ms: 5.1
+generated_at: 2026-10-10T11:55:47.376Z
+freshness_ms: 20.6
+build_ms: 4.8
 sources: {events_until: 2026-10-10, live_api: 2026-10-10T07:00:41.588Z, catalog_api: 2026-10-10T07:00:41.329Z}
 pipeline: apis_first+csv (gc=cached, catalog=cached, csv_rows=872, live=1)
 lookback_days: {enquiries: 90, pns_calls: 90, buyleads: 45, wa_chat: 60, vani_calls: 180, exec_calls: 60, whatsapp: 30, conversations: 30}

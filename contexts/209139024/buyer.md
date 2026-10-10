@@ -2,11 +2,11 @@
 schema: buyer.v2
 glid: "209139024"
 role: buyer
-generated_at: 2026-10-10T10:49:23.436Z
-freshness_ms: 129.2
-build_ms: 23.2
+generated_at: 2026-10-10T11:55:47.390Z
+freshness_ms: 13.8
+build_ms: 5.2
 sources: {events_until: 2026-10-10, live_api: 2026-10-10T06:19:48.604Z, catalog_api: not fetched}
-pipeline: apis_first+csv (gc=cached, catalog=skipped, csv_rows=557, live=6)
+pipeline: apis_first+csv (gc=cached, catalog=skipped, csv_rows=557, live=9)
 lookback_days: {buyer_activity: 30, wa_chat: 60, call_extractions: 90, enquiries: 90, conversations: 30}
 merge: {policy: catalog_api > gc_api > csv, fields: {catalog: 0, api: 0, dataset: 0}}
 conflicts_resolved: []
@@ -18,14 +18,15 @@ data: REAL (internal use only)
 
 ## Snapshot
 - status: active
-- language: hi-IN (call extractions)
+- language: hi-IN (last conversation)
 - business_buyer: yes — also sells Door Seals as Shreeva Enterprises
 - kyc: mobile ✓, email ✓, GST ✓
 
 ## Open threads (resume these first)
+- [voice 2026-10-10, today] Share matching seller quotes for EPE Becker Rod.
+- [voice 2026-10-10, today] Wait for the executive callback between 2 PM and 3 PM today.
 - [buy-lead 2026-10-07, 3d ago] Posted requirement: EPE Becker Rod — share matching sellers / quotes
 - [c2c 2026-10-05, 5d ago] Contacted a seller — ask how it went
-- [call 2026-09-16, 24d ago] Was sourcing Pneumatic Door Guard Packing Machine; Band Sealer… by phone
 
 ## Known facts (do not re-ask)
 - price_quoted: 300000
@@ -57,11 +58,12 @@ data: REAL (internal use only)
 - 2026-09-02 | Non Woven Roll (Rewinding Service) | Service Type: Rewinding | -
 
 ## Conversations (all channels, latest 4)
+- 2026-10-10 (today) voice: The bot informed Anil that a callback is already scheduled and offered to share matching seller quotes for the EPE Becker Rod.
 - 2026-09-02 (38d ago) whatsapp bot: Msite BL Quantity, Msite BL Spec
 - 2026-08-22 (49d ago) whatsapp bot: Msite BL Quantity, Msite BL Spec → Backer Rod
 
 ## Engagement
-- last_active: 2026-10-07 (3d ago)
+- last_active: 2026-10-10 (today)
 - activity_30d: C2C 121, ENQ 115, Browse 97, Search 88, Others 52, BL 5
 - sourcing_calls_90d: 2 | requirements_posted: 7
 - best_time: afternoon

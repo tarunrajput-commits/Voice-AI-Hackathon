@@ -2,11 +2,11 @@
 schema: seller.v2
 glid: "239368219"
 role: seller
-generated_at: 2026-10-10T10:55:11.329Z
-freshness_ms: 115.7
-build_ms: 5.1
+generated_at: 2026-10-10T11:55:47.421Z
+freshness_ms: 18.2
+build_ms: 4.9
 sources: {events_until: 2026-10-10, live_api: 2026-10-10T06:18:05.929Z, catalog_api: 2026-10-10T06:18:06.019Z}
-pipeline: apis_first+csv (gc=cached, catalog=cached, csv_rows=1003, live=2)
+pipeline: apis_first+csv (gc=cached, catalog=cached, csv_rows=1003, live=3)
 lookback_days: {enquiries: 90, pns_calls: 90, buyleads: 45, wa_chat: 60, vani_calls: 180, exec_calls: 60, whatsapp: 30, conversations: 30}
 merge: {policy: catalog_api > gc_api > csv, fields: {catalog: 4, api: 9, dataset: 0}}
 conflicts_resolved: [account_type: api=Paid over dataset=Free; products_listed: catalog=52 over api=30; products_without_price: catalog=21 over api=0]
@@ -31,8 +31,8 @@ data: REAL (internal use only)
 
 ## Open threads (resume these first)
 - [meeting requested 2026-10-10, today] Discuss lead generation conce… (not confirmed, ref MT-DE3770)
-- [voice 2026-10-10, today] Team will share available meeting times for reference MT-DE3770.
-- [voice 2026-10-10, today] Bot will escalate the lead generation ticket to the executive.
+- [voice 2026-10-10, today] Bot to schedule a meeting with Tanisha for lead generation.
+- [voice 2026-10-10, today] Mukesh to decide on preferred meeting time.
 
 ## Known facts (do not re-ask)
 - lead_preference: facing lead generation issues
@@ -56,7 +56,7 @@ data: REAL (internal use only)
 - market (top categories, 4w): 824 buy-leads, 8 paid sellers, local 40
 
 ## Conversations (all channels, latest 1)
-- 2026-10-10 (today) voice: Mukesh requested help with lead generation and agreed to an unconfirm…
+- 2026-10-10 (today) voice: Mukesh confirmed lead generation issues and asked to schedule a meeti…
 
 ## Engagement
 - whatsapp_30d: 137 msgs (27 from seller) | read_rate: 82% | last: 2026-10-01

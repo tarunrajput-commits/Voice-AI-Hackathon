@@ -377,10 +377,19 @@ function startTimer() { timerStart = Date.now(); clearInterval(timerT); timerT =
 
 // ===================================================================================== microphone engine
 // raw PCM via AudioWorklet → energy VAD with 300 ms pre-roll → echo-aware barge-in → 16 kHz WAV upload
+// Robustness rules (why the bot no longer cuts itself off):
+//  * sound is only a PROVISIONAL turn until it has real speech: 0.2 s when the bot is listening, 0.3 s while it is
+//    thinking (cancels its pending answer), 0.4 s when talking over it;
+//    coughs, clicks and room noise are dropped and never cancel a pending answer
+//  * soft barge-in: while unsure, the bot's volume is ducked instead of stopped; it stops only when confirmed
+//  * the bot's own echo is compared against the last 400 ms of its audio (speaker + mic latency),
+//    the room's echo level is learned continuously, and the room tail right after the bot stops is ignored
 const MIC = {stream: null, actx: null, node: null, rate: 48000};
-const VAD = {chunkMs: 20, startChunks: 3, endSilenceMs: 800, maxMs: 15000, preroll: 15, base: 0.012, bargeChunks: 8, learnMs: 350};
-let noise = 0.004, voiced = 0, silent = 0, utter = null, preroll = [], muted = false;
-let turnSeq = 0, interruptedPending = false, botEnv = null, echoGain = 0.35, speakStart = 0, bargeRun = 0;
+const VAD = {chunkMs: 20, startChunks: 4, confirmChunks: 10, thinkConfirmChunks: 15, bargeStartChunks: 5, bargeConfirmChunks: 20,
+             candSilenceChunks: 15, candMaxMs: 1500, endSilenceMs: 800, maxMs: 15000, preroll: 15, base: 0.012,
+             echoLookbackChunks: 20, duck: 0.2, tailMs: 400};
+let noise = 0.004, run = 0, silent = 0, utter = null, uVoiced = 0, preroll = [], muted = false, cand = null;
+let turnSeq = 0, interruptedPending = false, awaiting = false, botEnv = null, echoGain = 0.4, speakEnd = 0;
 let waRecording = false, waChunks = [];
 const WORKLET = `class Cap extends AudioWorkletProcessor{constructor(){super();this.b=[];this.n=0;this.size=Math.round(sampleRate*0.02)}
 process(i){const c=i[0]&&i[0][0];if(c){this.b.push(new Float32Array(c));this.n+=c.length;if(this.n>=this.size){const o=new Float32Array(this.n);
@@ -414,10 +423,11 @@ function releaseMic() {
   MIC.stream = MIC.actx = MIC.node = null; setLevel(0);
 }
 const rms = a => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s / a.length); };
-function expectedEcho() {
+function expectedEcho() {          // loudest bot audio in the last ~400 ms (speaker→mic latency), at today's volume
   if (!botEnv || audioEl.paused) return 0;
-  const i = Math.floor(audioEl.currentTime * 1000 / VAD.chunkMs);
-  return Math.max(botEnv[i] || 0, botEnv[i + 1] || 0, botEnv[i - 1] || 0);
+  const i = Math.floor(audioEl.currentTime * 1000 / VAD.chunkMs); let m = 0;
+  for (let k = Math.max(0, i - VAD.echoLookbackChunks); k <= i + 3; k++) if ((botEnv[k] || 0) > m) m = botEnv[k];
+  return m * audioEl.volume;
 }
 function onChunk(ch) {
   if (!session) return;
@@ -427,33 +437,55 @@ function onChunk(ch) {
   if (muted) return;
   preroll.push(ch); if (preroll.length > VAD.preroll) preroll.shift();
   const listenThr = Math.max(VAD.base, noise * 3);
-  if (phase === "speaking") {                        // caller talking over the bot?
-    const echo = expectedEcho();
-    if (performance.now() - speakStart < VAD.learnMs && echo > 0.01) { echoGain = Math.min(1.5, 0.8 * echoGain + 0.2 * (lv / echo)); return; }
-    const thr = Math.max(listenThr * 1.6, echoGain * echo * 2.2 + noise * 2, 0.025);
-    bargeRun = lv > thr ? bargeRun + 1 : 0;
-    if (bargeRun >= VAD.bargeChunks) { bargeRun = 0; bargeIn(); beginUtterance(); }
-    return;
-  }
-  if (phase === "listening" || phase === "thinking") {
-    if (lv > listenThr) voiced++; else { voiced = 0; if (phase === "listening") noise = 0.97 * noise + 0.03 * lv; }
-    if (voiced >= VAD.startChunks) beginUtterance();
-    return;
-  }
-  if (phase === "hearing" && utter) {
+
+  if (phase === "hearing" && utter) {                 // a confirmed turn: record until the caller pauses
     utter.push(ch);
-    silent = lv > listenThr * 0.8 ? 0 : silent + 1;
+    if (lv > listenThr * 0.8) { silent = 0; uVoiced++; } else silent++;
     if (silent * VAD.chunkMs >= VAD.endSilenceMs || utter.length * VAD.chunkMs >= VAD.maxMs) finishUtterance();
+    return;
+  }
+  let thr = listenThr;
+  if (phase === "speaking") {                         // separate the caller from the bot's own echo
+    const echo = expectedEcho();
+    thr = Math.max(listenThr * 2, echoGain * echo * 2.5 + noise * 2, 0.03);
+    // learn the room's echo level ONLY from audio that looks like echo (below the threshold), never from the
+    // caller's voice; rise slowly, fall faster, so talking over the bot can't raise the bar against itself
+    if (!cand && echo > 0.02 && lv > listenThr && lv < thr) {      // audible, echo-like frames only
+      const g = Math.min(2, lv / echo), a = g > echoGain ? 0.03 : 0.1;
+      echoGain = Math.max(0.1, Math.min(2, (1 - a) * echoGain + a * g));
+    }
+  } else if (performance.now() - speakEnd < VAD.tailMs) {
+    thr = listenThr * 2;                              // room echo right after the bot stops
+  }
+  if (!cand) {
+    if (phase !== "listening" && phase !== "thinking" && phase !== "speaking") return;
+    if (lv > thr) run++; else { run = 0; if (phase !== "speaking") noise = 0.97 * noise + 0.03 * lv; }
+    if (run >= (phase === "speaking" ? VAD.bargeStartChunks : VAD.startChunks)) {
+      cand = {mode: phase, chunks: preroll.slice(), voiced: run, silent: 0, t0: performance.now()}; run = 0;
+      if (phase === "speaking") audioEl.volume = VAD.duck;      // soft barge-in: lower the bot while we check
+    }
+    return;
+  }
+  cand.chunks.push(ch);                                 // provisional speech: confirm it or drop it
+  if (lv > thr * 0.8) { cand.voiced++; cand.silent = 0; } else cand.silent++;
+  const need = cand.mode === "speaking" ? VAD.bargeConfirmChunks : cand.mode === "thinking" ? VAD.thinkConfirmChunks : VAD.confirmChunks;
+  if (cand.voiced >= need) { commit(); return; }
+  if (cand.silent >= VAD.candSilenceChunks || performance.now() - cand.t0 > VAD.candMaxMs) {
+    if (cand.mode === "speaking") audioEl.volume = 1;   // it was noise / echo: bot carries on at full volume
+    cand = null;
   }
 }
-function beginUtterance() {
-  if (phase === "thinking") { interruptedPending = true; addMsg("sys", "↪ You started talking, so the pending answer won't be spoken."); }
-  turnSeq++; utter = preroll.slice(); preroll = []; voiced = silent = 0;
+function commit() {                                     // the caller is really talking
+  const c = cand; cand = null;
+  if (c.mode === "speaking" && phase === "speaking") bargeIn();
+  if (c.mode === "thinking" && awaiting) addMsg("sys", "↪ You started talking, so the pending answer won't be spoken.");
+  if (c.mode !== "listening") interruptedPending = true;
+  turnSeq++; utter = c.chunks; uVoiced = c.voiced; silent = c.silent;
   setPhase("hearing");
 }
 function finishUtterance() {
   const chunks = utter; utter = null; silent = 0;
-  if ((chunks.length - VAD.endSilenceMs / VAD.chunkMs) * VAD.chunkMs < 300) { setPhase("listening"); return; }   // cough / click
+  if (uVoiced < VAD.confirmChunks) { setPhase(awaiting ? "thinking" : "listening"); return; }
   sendAudio(chunks, turnSeq);
 }
 function toWav(chunks) {
@@ -497,16 +529,17 @@ function envelopeOf(b64) {         // loudness of the bot's reply every 20 ms = 
 }
 function speak(b64, then) {
   afterSpeech = then || null;
-  const done = () => { botEnv = null; audioEl.onended = null; const f = afterSpeech; afterSpeech = null;
+  const done = () => { botEnv = null; audioEl.onended = null; audioEl.volume = 1; speakEnd = performance.now();
+    const f = afterSpeech; afterSpeech = null;
     if (f) f(); else if (session && channel === "voice" && phase === "speaking") setPhase(muted ? "muted" : "listening"); };
   if (!b64) { done(); return; }
   botEnv = envelopeOf(b64);
   audioEl.src = "data:audio/wav;base64," + b64;
   audioEl.onended = done;
-  setPhase("speaking"); speakStart = performance.now(); bargeRun = 0;
+  setPhase("speaking"); audioEl.volume = 1; cand = null; run = 0;
   audioEl.play().catch(done);
 }
-function stopSpeaking() { audioEl.onended = null; audioEl.pause(); botEnv = null; afterSpeech = null; }
+function stopSpeaking() { audioEl.onended = null; audioEl.pause(); audioEl.volume = 1; botEnv = null; afterSpeech = null; speakEnd = performance.now(); }
 function bargeIn() {
   stopSpeaking(); interruptedPending = true;
   const last = [...document.querySelectorAll(".msg.bot")].pop();
@@ -524,7 +557,7 @@ async function start(ch) {
   finally { starting = false; $("#callBtn").disabled = $("#waBtn").disabled = !!session; }
 }
 async function startInner(ch) {
-  channel = ch; muted = false; interruptedPending = false; turnSeq = 0;
+  channel = ch; muted = false; interruptedPending = false; turnSeq = 0; awaiting = false; cand = null; run = 0; echoGain = 0.4;
   $("#log").innerHTML = ""; $("#callPanel").className = "panel call " + ch; $("#timer").textContent = "";
   setPhase("connecting"); addMsg("sys", `Building ${sel.role}.md: live APIs, then CSV, then merge…`);
   $("#callBtn").disabled = $("#waBtn").disabled = true;
@@ -568,11 +601,12 @@ function handleReply(r, seq) {
 
 async function sendAudio(chunks, seq) {
   const wasInterrupted = interruptedPending; interruptedPending = false;
-  setPhase("thinking"); $("#caption").textContent = "Transcribing…";
+  awaiting = true; setPhase("thinking"); $("#caption").textContent = "Transcribing…";
   const fd = new FormData(); fd.append("file", toWav(chunks), "turn.wav"); fd.append("interrupted", wasInterrupted ? "1" : "0");
   let r;
   try { const res = await fetch(`/api/session/${session}/audio`, {method: "POST", body: fd}); r = await res.json(); }
   catch (e) { r = {detail: e.message}; }
+  awaiting = false;
   if (!session) return;
   if (r.detail) { $("#caption").textContent = "⚠️ " + r.detail; if (phase === "thinking") setPhase("listening"); return; }
   if (!r.transcript) { $("#caption").textContent = "Didn't catch that. Please say it again."; if (phase === "thinking") setPhase("listening"); return; }
@@ -586,10 +620,11 @@ async function sendText() {
   $("#text").value = ""; addMsg("me", t);
   if (phase === "speaking") bargeIn();
   const wasInterrupted = interruptedPending; interruptedPending = false;
-  const seq = ++turnSeq; setPhase("thinking");
+  const seq = ++turnSeq; awaiting = true; setPhase("thinking");
   let r;
   try { r = await api(`/api/session/${session}/message`, {method: "POST", body: JSON.stringify({text: t, interrupted: wasInterrupted})}); }
-  catch (e) { addMsg("sys", "⚠️ " + e.message); setPhase("listening"); return; }
+  catch (e) { awaiting = false; addMsg("sys", "⚠️ " + e.message); setPhase("listening"); return; }
+  awaiting = false;
   if (!session) return;
   handleReply(r, seq);
 }
