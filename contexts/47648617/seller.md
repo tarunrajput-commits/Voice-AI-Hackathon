@@ -2,9 +2,9 @@
 schema: seller.v2
 glid: "47648617"
 role: seller
-generated_at: 2026-10-10T11:55:47.428Z
-freshness_ms: 2.2
-build_ms: 1.4
+generated_at: 2026-10-10T12:31:04.062Z
+freshness_ms: 3.3
+build_ms: 1.9
 sources: {events_until: 2026-10-10, live_api: 2026-10-10T06:18:08.718Z, catalog_api: 2026-10-10T06:18:08.919Z}
 pipeline: apis_first+csv (gc=cached, catalog=cached, csv_rows=25, live=2)
 lookback_days: {enquiries: 90, pns_calls: 90, buyleads: 45, wa_chat: 60, vani_calls: 180, exec_calls: 60, whatsapp: 30, conversations: 30}
@@ -31,13 +31,13 @@ data: REAL (internal use only)
 - past questions: AI Bot Confirmation (1); Enquiry Lead (1); Problem Complaint (1)
 
 ## Open threads (resume these first)
-- [voice 2026-10-10, today] Update missing prices on 3 catalog products.
-- [voice 2026-10-10, today] Contact the buyer from Bharatpur regarding the unread enquiry.
-- [voice 2026-10-10, today] Verify if the scheduled meeting from June 26 occurred.
+- [callback requested 2026-10-10, today] Seller reports auto-debit stopped after… (not confirmed, ref CB-53A073)
+- [voice 2026-10-10, today] Callback to resolve auto-debit issue (ref CB-53A073).
+- [voice 2026-10-10, today] Seller must read the unread Bull HD76 enquiry.
 
 ## Known facts (do not re-ask)
-- delivery_city: Bharatpur
-- product: Bull HD76 Backhoe Loader
+- unread_enquiry: Bull HD76 4WD Backhoe Loader
+- auto_debit_status: stopped due to credit exhaustion
 - gst_registered_since: 2017
 - products_listed: 7
 - location_preference: Local
@@ -57,8 +57,8 @@ data: REAL (internal use only)
 - market (top categories, 4w): 306 buy-leads, 4 paid sellers, local 10
 
 ## Conversations (all channels, latest 2)
-- 2026-10-10 (today) voice: Sanjay confirmed updating Backhoe Loader photos and acknowledged an unread lead…
-- 2026-10-10 (today) voice: Seller said: क्या चाहिए? नहीं, इस प्रोसेस नहीं है, प्रोसेस स्लो कर रहा है। देखो…
+- 2026-10-10 (today) voice: Sanjay discussed an unresolved meeting and an unread backhoe loader enquiry, ag…
+- 2026-06-26 (106d ago) vani call: Meeting Fixed: The lead initially expressed unavailability for a meeting but la…
 
 ## Engagement
 - vani_history: answered 1/1 | avg 206s

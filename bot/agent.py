@@ -162,6 +162,17 @@ _END_CALL = re.compile(
 END_TOKEN = "<END_CALL>"
 
 
+# Acknowledgements / back-channel: the caller is only saying "go on" – the bot should resume, not answer.
+_BACKCHANNEL = re.compile(
+    r"^\s*((haan|haa|ha|han|hmm+|hm+|mm+|ok|okay|achha|accha|acha|achcha|theek hai|thik hai|theek|ji|ji haan|haan ji|"
+    r"yes|yeah|yep|right|sure|uh huh|bolo|boliye|bolie|go on|continue|haan boliye|ji boliye|"
+    r"हाँ|हां|हा|जी|जी हाँ|हाँ जी|अच्छा|ठीक है|ठीक|हम्म|हम|ओके|बोलिए|बोलो|हाँ बोलिए)[\s.,!?।]*)+$", re.I)
+
+
+def is_backchannel(text):
+    return not (text or "").strip() or bool(_BACKCHANNEL.match(text.strip()))
+
+
 def wants_to_end(user_text):
     return bool(_END_CALL.search(user_text or ""))
 
@@ -353,14 +364,28 @@ class Session:
         self.messages.append({"role": "assistant", "content": text})
         return text, changed
 
-    def mark_interrupted(self):
-        """The caller cut the bot off (barge-in) or its last reply was never played: tell the LLM so it does not
-        assume the caller heard everything, and it answers what they say now instead of repeating itself."""
+    def mark_interrupted(self, heard=None):
+        """The caller cut the bot off mid-reply. Keep only the part they actually heard (heard = fraction 0..1 of the
+        reply's audio that was played) so the LLM answers the new point instead of assuming everything was heard."""
         for m in reversed(self.messages):
             if m["role"] == "assistant":
-                if "[caller interrupted" not in m["content"]:
-                    m["content"] += " [caller interrupted here – they may not have heard all of this]"
+                if "[caller interrupted" in m["content"]:
+                    break
+                text = m["content"]
+                if heard is not None and 0 <= heard < 0.95:
+                    cut = max(0, int(len(text) * heard))
+                    text = text[:cut].rstrip() + "…"
+                m["content"] = text + " [caller interrupted here – they only heard up to this point]"
                 break
+
+    def merge_unheard(self):
+        """The caller kept talking before hearing the bot's last reply (they had only paused). Drop that unheard reply
+        and return the caller's previous words, so both parts are answered together as one turn."""
+        if self.messages and self.messages[-1]["role"] == "assistant":
+            self.messages.pop()
+        if self.messages and self.messages[-1]["role"] == "user":
+            return self.messages.pop()["content"]
+        return ""
 
     def _strip_invented_name(self, text):
         """'Namaste Sunita ji' when the file has no such name -> 'Namaste ji'. Real names from the file pass through."""

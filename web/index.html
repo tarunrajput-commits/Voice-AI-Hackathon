@@ -389,7 +389,13 @@ const VAD = {chunkMs: 20, startChunks: 4, confirmChunks: 10, thinkConfirmChunks:
              candSilenceChunks: 15, candMaxMs: 1500, endSilenceMs: 800, maxMs: 15000, preroll: 15, base: 0.012,
              echoLookbackChunks: 20, duck: 0.2, tailMs: 400};
 let noise = 0.004, run = 0, silent = 0, utter = null, uVoiced = 0, preroll = [], muted = false, cand = null;
-let turnSeq = 0, interruptedPending = false, awaiting = false, botEnv = null, echoGain = 0.4, speakEnd = 0;
+let awaiting = false, botEnv = null, echoGain = 0.4, speakEnd = 0;
+// conversation state for interruptions:
+//   interrupted – the bot reply the caller talked over (audio + position), resumed if they only said "haan"/noise
+//   held        – a reply that arrived while the caller was still talking; played if they were only acknowledging,
+//                 replaced (both parts answered together) if they kept speaking
+//   continuing  – the caller resumed speaking before hearing the pending reply (they had only paused)
+let interrupted = null, held = null, continuing = false, inflight = Promise.resolve(), nowPlaying = null, lastUserEl = null;
 let waRecording = false, waChunks = [];
 const WORKLET = `class Cap extends AudioWorkletProcessor{constructor(){super();this.b=[];this.n=0;this.size=Math.round(sampleRate*0.02)}
 process(i){const c=i[0]&&i[0][0];if(c){this.b.push(new Float32Array(c));this.n+=c.length;if(this.n>=this.size){const o=new Float32Array(this.n);
@@ -473,20 +479,26 @@ function onChunk(ch) {
   if (cand.silent >= VAD.candSilenceChunks || performance.now() - cand.t0 > VAD.candMaxMs) {
     if (cand.mode === "speaking") audioEl.volume = 1;   // it was noise / echo: bot carries on at full volume
     cand = null;
+    if (held && phase !== "hearing" && !continuing) releaseHeld();
   }
 }
 function commit() {                                     // the caller is really talking
   const c = cand; cand = null;
   if (c.mode === "speaking" && phase === "speaking") bargeIn();
-  if (c.mode === "thinking" && awaiting) addMsg("sys", "↪ You started talking, so the pending answer won't be spoken.");
-  if (c.mode !== "listening") interruptedPending = true;
-  turnSeq++; utter = c.chunks; uVoiced = c.voiced; silent = c.silent;
+  if (c.mode === "thinking" && awaiting) continuing = true;   // they had only paused: this continues the same sentence
+  utter = c.chunks; uVoiced = c.voiced; silent = c.silent;
   setPhase("hearing");
 }
 function finishUtterance() {
   const chunks = utter; utter = null; silent = 0;
-  if (uVoiced < VAD.confirmChunks) { setPhase(awaiting ? "thinking" : "listening"); return; }
-  sendAudio(chunks, turnSeq);
+  if (uVoiced < VAD.confirmChunks) { setPhase(awaiting ? "thinking" : "listening"); afterNothingSaid(); return; }   // too short
+  setPhase("thinking");                  // the caller finished this utterance
+  sendAudio(chunks);
+}
+function afterNothingSaid() {            // noise / "haan" / unclear: carry on with whatever the bot was doing
+  if (interrupted) resumeInterrupted();
+  else if (held && !awaiting) releaseHeld();
+  else if (phase !== "speaking") setPhase(awaiting ? "thinking" : "listening");
 }
 function toWav(chunks) {
   const len = chunks.reduce((a, c) => a + c.length, 0), all = new Float32Array(len);
@@ -527,23 +539,47 @@ function envelopeOf(b64) {         // loudness of the bot's reply every 20 ms = 
     return env;
   } catch (_) { return null; }
 }
-function speak(b64, then) {
+function speak(b64, then, opts = {}) {
   afterSpeech = then || null;
-  const done = () => { botEnv = null; audioEl.onended = null; audioEl.volume = 1; speakEnd = performance.now();
+  const done = () => { botEnv = null; audioEl.onended = null; audioEl.volume = 1; speakEnd = performance.now(); nowPlaying = null;
     const f = afterSpeech; afterSpeech = null;
     if (f) f(); else if (session && channel === "voice" && phase === "speaking") setPhase(muted ? "muted" : "listening"); };
   if (!b64) { done(); return; }
   botEnv = envelopeOf(b64);
+  nowPlaying = {b64, el: opts.el || null};
   audioEl.src = "data:audio/wav;base64," + b64;
+  if (opts.startAt > 0) audioEl.addEventListener("loadedmetadata", () => { try { audioEl.currentTime = opts.startAt; } catch (_) {} }, {once: true});
   audioEl.onended = done;
   setPhase("speaking"); audioEl.volume = 1; cand = null; run = 0;
   audioEl.play().catch(done);
 }
 function stopSpeaking() { audioEl.onended = null; audioEl.pause(); audioEl.volume = 1; botEnv = null; afterSpeech = null; speakEnd = performance.now(); }
-function bargeIn() {
-  stopSpeaking(); interruptedPending = true;
-  const last = [...document.querySelectorAll(".msg.bot")].pop();
-  if (last && !last.classList.contains("cut")) { last.classList.add("cut"); const n = document.createElement("span"); n.className = "note"; n.textContent = "✋ interrupted"; last.appendChild(n); }
+function note(el, text) {
+  if (!el) return;
+  let n = el.querySelector && el.querySelector(".note");
+  if (!n && text) { n = document.createElement("span"); n.className = "note"; el.appendChild(n); }
+  if (n) { n.textContent = text; if (!text) n.remove(); }
+}
+function bargeIn() {                      // caller talks over the bot: pause and remember where it stopped
+  if (nowPlaying) interrupted = {b64: nowPlaying.b64, el: nowPlaying.el, pos: audioEl.currentTime || 0,
+                                 dur: audioEl.duration || 0, then: afterSpeech};
+  stopSpeaking();
+  if (interrupted) note(interrupted.el, "⏸ paused – listening to you");
+}
+function resumeInterrupted() {           // they only acknowledged ("haan", "ok") or it was noise: continue the sentence
+  const i = interrupted; interrupted = null;
+  note(i.el, "");
+  speak(i.b64, i.then, {startAt: Math.max(0, i.pos - 0.6), el: i.el});
+}
+function playReply(r, el) {
+  if (r.end_call) { speak(channel === "voice" ? r.audio : null, () => hangUp(true), {el}); return; }
+  if (channel === "voice") speak(r.audio, null, {el});
+  else if (phase === "thinking" || phase === "recording") setPhase("listening");
+}
+function releaseHeld() {                 // the caller was only acknowledging: play the reply we were holding
+  const h = held; held = null; continuing = false;
+  note(h.el, "");
+  playReply(h.r, h.el);
 }
 
 // ===================================================================================== session lifecycle
@@ -557,7 +593,8 @@ async function start(ch) {
   finally { starting = false; $("#callBtn").disabled = $("#waBtn").disabled = !!session; }
 }
 async function startInner(ch) {
-  channel = ch; muted = false; interruptedPending = false; turnSeq = 0; awaiting = false; cand = null; run = 0; echoGain = 0.4;
+  channel = ch; muted = false; awaiting = false; cand = null; run = 0; echoGain = 0.4;
+  interrupted = held = nowPlaying = lastUserEl = null; continuing = false; inflight = Promise.resolve();
   $("#log").innerHTML = ""; $("#callPanel").className = "panel call " + ch; $("#timer").textContent = "";
   setPhase("connecting"); addMsg("sys", `Building ${sel.role}.md: live APIs, then CSV, then merge…`);
   $("#callBtn").disabled = $("#waBtn").disabled = true;
@@ -583,56 +620,89 @@ async function startInner(ch) {
   $("#text").placeholder = ch === "voice" ? "Talk, or type a message…" : "Type a message, or 🎙 for a voice note…";
   $("#caption").textContent = ch === "voice" ? (micOk ? "Hands-free: just talk. Interrupt the bot any time. 📞 hangs up." : "Mic unavailable, so type to talk.")
                                              : "WhatsApp: type, or tap 🎙 to record a voice note and tap again to send.";
-  addMsg("bot", r.opening);
-  if (ch === "voice") speak(r.audio); else setPhase("listening");
+  const openEl = addMsg("bot", r.opening);
+  if (ch === "voice") speak(r.audio, null, {el: openEl}); else setPhase("listening");
   refreshFile(); loadUsers();
 }
 
-function handleReply(r, seq) {
+function handleReply(r) {
   showActions(r.actions);
-  const superseded = seq !== turnSeq;
-  const m = addMsg("bot", r.reply, superseded ? "not spoken – you were already talking" : "");
-  if (superseded) { m.classList.add("cut"); interruptedPending = true; }
   if (r.context_changed) addMsg("sys", "↻ Context file changed during the call; the bot is using the new version");
-  if (r.end_call) { speak(channel === "voice" && !superseded ? r.audio : null, () => hangUp(true)); return; }
-  if (channel === "voice" && !superseded) speak(r.audio);
-  else if (!superseded && (phase === "thinking" || phase === "recording")) setPhase("listening");
+  if (channel === "voice" && (phase === "hearing" || cand || continuing)) {   // never talk over the caller: hold it
+    held = {r, el: addMsg("bot", r.reply, "⏸ waiting – you're still talking")};
+    return;
+  }
+  playReply(r, addMsg("bot", r.reply));
 }
 
-async function sendAudio(chunks, seq) {
-  const wasInterrupted = interruptedPending; interruptedPending = false;
-  awaiting = true; setPhase("thinking"); $("#caption").textContent = "Transcribing…";
-  const fd = new FormData(); fd.append("file", toWav(chunks), "turn.wav"); fd.append("interrupted", wasInterrupted ? "1" : "0");
-  let r;
-  try { const res = await fetch(`/api/session/${session}/audio`, {method: "POST", body: fd}); r = await res.json(); }
-  catch (e) { r = {detail: e.message}; }
-  awaiting = false;
-  if (!session) return;
-  if (r.detail) { $("#caption").textContent = "⚠️ " + r.detail; if (phase === "thinking") setPhase("listening"); return; }
-  if (!r.transcript) { $("#caption").textContent = "Didn't catch that. Please say it again."; if (phase === "thinking") setPhase("listening"); return; }
-  addMsg("me", (channel === "whatsapp" ? "🎤 " : "") + r.transcript);
-  if (r.timings) $("#caption").textContent = `STT ${r.timings.stt_ms} ms · reply ${r.timings.llm_ms} ms` + (r.timings.tts_ms ? ` · voice ${r.timings.tts_ms} ms` : "");
-  handleReply(r, seq);
+async function sendAudio(chunks) {
+  const prev = inflight; let release; inflight = new Promise(res => release = res);
+  const wav = toWav(chunks);
+  try {
+    if (awaiting) { continuing = true; await prev; }   // caller continued: wait for the first part's answer, then merge
+    const intr = interrupted, unspoken = !!(held || continuing), mayResume = !!(intr || held || continuing);
+    awaiting = true; if (!utter && !cand) setPhase("thinking"); $("#caption").textContent = "Transcribing…";
+    const fd = new FormData();
+    fd.append("file", wav, "turn.wav");
+    fd.append("interrupted", intr ? "1" : "0");
+    fd.append("heard", intr && intr.dur ? Math.min(1, intr.pos / intr.dur).toFixed(2) : "");
+    fd.append("unspoken", unspoken ? "1" : "0");
+    fd.append("may_resume", mayResume ? "1" : "0");
+    let r;
+    try { const res = await fetch(`/api/session/${session}/audio`, {method: "POST", body: fd}); r = await res.json(); }
+    catch (e) { r = {detail: e.message}; }
+    awaiting = false;
+    if (!session) return;
+    if (r.detail) { $("#caption").textContent = "⚠️ " + r.detail; continuing = false; afterNothingSaid(); return; }
+    if (r.backchannel || !r.transcript) {             // "haan" / "ok" / noise: no new answer, carry on
+      if (r.transcript) addMsg("me", r.transcript, "acknowledged");
+      else if (!intr && !held) $("#caption").textContent = "Didn't catch that. Please say it again.";
+      continuing = false;
+      if (!utter && !cand) afterNothingSaid();       // (if they've started talking again, that new turn decides)
+      return;
+    }
+    if (unspoken) {                                    // one sentence said in two parts: show and answer it as one
+      if (held) { held.el.remove(); held = null; }
+      continuing = false;
+      if (lastUserEl && lastUserEl.isConnected) lastUserEl.firstChild.textContent += " " + r.transcript;
+      else lastUserEl = addMsg("me", r.transcript);
+    } else {
+      lastUserEl = addMsg("me", (channel === "whatsapp" ? "🎤 " : "") + r.transcript);
+    }
+    if (intr) { note(intr.el, "✋ interrupted"); intr.el && intr.el.classList.add("cut"); interrupted = null; }
+    if (r.timings) $("#caption").textContent = `STT ${r.timings.stt_ms} ms · reply ${r.timings.llm_ms} ms` + (r.timings.tts_ms ? ` · voice ${r.timings.tts_ms} ms` : "");
+    handleReply(r);
+  } finally { release(); }
 }
 
 async function sendText() {
   const t = $("#text").value.trim(); if (!t || !session) return;
-  $("#text").value = ""; addMsg("me", t);
+  $("#text").value = ""; lastUserEl = addMsg("me", t);
   if (phase === "speaking") bargeIn();
-  const wasInterrupted = interruptedPending; interruptedPending = false;
-  const seq = ++turnSeq; awaiting = true; setPhase("thinking");
-  let r;
-  try { r = await api(`/api/session/${session}/message`, {method: "POST", body: JSON.stringify({text: t, interrupted: wasInterrupted})}); }
-  catch (e) { awaiting = false; addMsg("sys", "⚠️ " + e.message); setPhase("listening"); return; }
-  awaiting = false;
-  if (!session) return;
-  handleReply(r, seq);
+  const prev = inflight; let release; inflight = new Promise(res => release = res);
+  try {
+    if (awaiting) { continuing = true; await prev; }
+    const intr = interrupted, unspoken = !!(held || continuing);
+    if (held) { held.el.remove(); held = null; }
+    continuing = false; interrupted = null;
+    if (intr) { note(intr.el, "✋ interrupted"); intr.el && intr.el.classList.add("cut"); }
+    awaiting = true; setPhase("thinking");
+    let r;
+    try {
+      r = await api(`/api/session/${session}/message`, {method: "POST", body: JSON.stringify({text: t, interrupted: !!intr,
+            heard: intr && intr.dur ? Math.min(1, intr.pos / intr.dur) : null, unspoken})});
+    } catch (e) { awaiting = false; addMsg("sys", "⚠️ " + e.message); setPhase("listening"); return; }
+    awaiting = false;
+    if (!session) return;
+    handleReply(r);
+  } finally { release(); }
 }
 
 async function hangUp(byBot) {
   if (!session) return;
   const sid = session; session = null;
   stopSpeaking(); releaseMic(); clearInterval(timerT); utter = null; waRecording = false;
+  interrupted = held = null; continuing = false; cand = null;
   ["#text", "#sendBtn", "#hangBtn", "#micBtn"].forEach(s => $(s).disabled = true);
   $("#micBtn").className = "round mic"; $("#micBtn").textContent = "🎙";
   setPhase("ended");
@@ -653,7 +723,7 @@ async function micButton() {
       setPhase("recording"); $("#caption").textContent = "🔴 Recording voice note. Tap ➤ to send."; }
     else { waRecording = false; $("#micBtn").className = "round mic"; $("#micBtn").textContent = "🎙";
       if (waChunks.length * VAD.chunkMs < 400) { setPhase("listening"); $("#caption").textContent = "Too short. Record a little longer."; return; }
-      sendAudio(waChunks, ++turnSeq); }
+      sendAudio(waChunks); }
     return;
   }
   muted = !muted;                                     // call: mute / unmute

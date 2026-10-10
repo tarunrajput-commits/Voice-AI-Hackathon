@@ -288,7 +288,9 @@ def session_start(body: StartIn):
 class MsgIn(BaseModel):
     text: str
     speak: bool = True
-    interrupted: bool = False      # the caller talked over / cut off the bot's previous reply
+    interrupted: bool = False      # the caller talked over the bot's previous reply
+    heard: float | None = None     # fraction (0..1) of that reply the caller actually heard
+    unspoken: bool = False         # the bot's last reply was never played: merge this with the caller's previous words
 
 
 def _sess(sid):
@@ -301,10 +303,13 @@ def _sess(sid):
 @app.post("/api/session/{sid}/message")
 def session_message(sid: str, body: MsgIn):
     s = _sess(sid)
-    if body.interrupted:
-        s.mark_interrupted()
+    text = body.text
+    if body.unspoken:
+        text = (s.merge_unheard() + " " + text).strip()
+    elif body.interrupted:
+        s.mark_interrupted(body.heard)
     n_before = len(s.actions)
-    reply, changed = s.reply(body.text)
+    reply, changed = s.reply(text)
     audio = None
     if s.channel == "voice" and body.speak:
         try:
@@ -319,12 +324,14 @@ _CODECS = {"webm": "webm", "ogg": "ogg", "mp4": "mp4", "m4a": "x-m4a", "mpeg": "
 
 
 @app.post("/api/session/{sid}/audio")
-async def session_audio(sid: str, file: UploadFile = File(...), interrupted: str = Form("0")):
+async def session_audio(sid: str, file: UploadFile = File(...), interrupted: str = Form("0"), heard: str = Form(""),
+                        unspoken: str = Form("0"), may_resume: str = Form("0")):
     """One spoken turn from the browser mic: Saaras STT -> bot reply (with the caller's .md) -> Bulbul TTS (voice only).
-    interrupted=1: the caller barged in over the bot's previous reply (or it was never played)."""
+    interrupted=1 + heard=0..1 : the caller talked over the bot's reply after hearing that fraction of it
+    unspoken=1                 : the bot's last reply was never played (caller had only paused) -> answer both parts together
+    may_resume=1               : if this turn is only "haan / ok / achha" or noise, don't answer – the browser resumes the bot"""
     s = _sess(sid)
-    if interrupted in ("1", "true"):
-        s.mark_interrupted()
+    yes = lambda v: v in ("1", "true")
     data = await file.read()
     ctype = (file.content_type or "").split(";")[0].split("/")[-1].lower()
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
@@ -336,10 +343,22 @@ async def session_audio(sid: str, file: UploadFile = File(...), interrupted: str
         print("stt error", e)
         raise HTTPException(502, f"Speech-to-text failed: {str(e)[:120]}")
     t1 = time.time()
+    if yes(may_resume) and agent.is_backchannel(transcript):
+        # acknowledgement or noise while the bot was talking / about to talk: nothing to answer, the bot carries on
+        return {"transcript": transcript, "backchannel": True, "reply": "", "audio": None,
+                "timings": {"stt_ms": round((t1 - t0) * 1000)}}
     if not transcript.strip():
         return {"transcript": "", "reply": "", "audio": None, "timings": {"stt_ms": round((t1 - t0) * 1000)}}
+    text = transcript
+    if yes(unspoken):
+        text = (s.merge_unheard() + " " + transcript).strip()
+    elif yes(interrupted):
+        try:
+            s.mark_interrupted(float(heard) if heard else None)
+        except ValueError:
+            s.mark_interrupted()
     n_before = len(s.actions)
-    reply, changed = s.reply(transcript)
+    reply, changed = s.reply(text)
     t2 = time.time()
     audio = None
     if s.channel == "voice":                    # WhatsApp voice notes get a text reply
