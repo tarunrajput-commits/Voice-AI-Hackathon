@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: voice-ai-hackathon
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: GC_API_BASE
+        sync: false
+      - key: GC_API_EMPID
+        sync: false
+      - key: GC_API_XFF
+        sync: false
+      - key: GC_API_AK
+        sync: false
+      - key: CATALOG_API_URL
+        sync: false
+      - key: CATALOG_API_TOKEN
+        sync: false
+      - key: CATALOG_API_MODID
+        sync: false
